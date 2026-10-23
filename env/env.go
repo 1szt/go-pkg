@@ -34,8 +34,8 @@ import (
 	"strings"
 )
 
-// fileName 配置文件路径，通过 Path() 自定义，零值默认 data/.env
-var fileName = ""
+// fileName 配置文件路径，通过 Path() 自定义，默认 data/.env
+var fileName = "data/.env"
 
 // Path 设置配置文件路径（建议在程序入口只调用一次，之后任意包 Get/Set 均读写该文件）
 // 传空字符串则回落到默认路径 data/.env
@@ -47,22 +47,12 @@ func Path(p string) {
 	fileName = p
 }
 
-// path 返回当前生效的配置文件路径（未调用 Path 时为默认值）
-func path() string {
-	if fileName == "" {
-		return "data/.env"
-	}
-	return fileName
-}
-
 // Add 声明一个配置项：文件中不存在该 Key 时自动追加【注释+默认值】，已存在则保持原样
 //
 // 参数：key 环境变量名，value 默认值，comments 任意多行注释（以 # 写入文件）
 func Add(key, value string, comments ...string) {
-	// 1. 确保目录存在（创建 data 文件夹）
-	file := path()
-	dir := filepath.Dir(file)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
+	// 1. 确保目录存在（目录已存在时 MkdirAll 是空操作）
+	if dir := filepath.Dir(fileName); dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			fmt.Println("创建目录失败:", err)
 			return
@@ -70,7 +60,7 @@ func Add(key, value string, comments ...string) {
 	}
 
 	// 2. 读取现有内容（文件不存在则为空）
-	existingContent, _ := os.ReadFile(file)
+	existingContent, _ := os.ReadFile(fileName)
 
 	// 3. 已存在该 Key 则跳过（逐行行首精确匹配，避免 PORT 被 GRPC_PORT 误判为已存在）
 	if fileHasKey(string(existingContent), key) {
@@ -91,7 +81,7 @@ func Add(key, value string, comments ...string) {
 		data = "\n" + data
 	}
 
-	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		fmt.Println("打开/创建文件失败:", err)
 		return
@@ -112,7 +102,7 @@ func Get(key string) string {
 
 // GetFile 仅从配置文件读取值，不检查系统环境变量
 func GetFile(key string) string {
-	content, err := os.ReadFile(path())
+	content, err := os.ReadFile(fileName)
 	if err != nil {
 		return ""
 	}
@@ -131,24 +121,24 @@ func GetEnv(key string) string {
 
 // Set 修改配置值并落盘：找到 KEY= 只替换值所在行（注释保持不动），没有则追加
 func Set(key, value string) error {
-	// 1. 读取文件全部内容
-	file := path()
-	// 先确保目录存在（Path 指向任意深层目录时也能落盘）
-	if dir := filepath.Dir(file); dir != "." {
+	// 1. 确保目录存在（Path 指向任意深层目录时也能落盘）
+	if dir := filepath.Dir(fileName); dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
 	}
-	existingContent, err := os.ReadFile(file)
+
+	// 2. 读取文件全部内容
+	existingContent, err := os.ReadFile(fileName)
 	if err != nil {
 		// 文件不存在，直接创建新文件写入
-		return os.WriteFile(file, []byte(key+"="+value+"\n"), 0644)
+		return os.WriteFile(fileName, []byte(key+"="+value+"\n"), 0644)
 	}
 
 	lines := strings.Split(string(existingContent), "\n")
 	found := false
 
-	// 2. 逐行扫描，替换已有 Key 的值
+	// 3. 逐行扫描，替换已有 Key 的值
 	for i, line := range lines {
 		if k, _, ok := parseKV(line); ok && k == key {
 			lines[i] = key + "=" + value
@@ -157,13 +147,13 @@ func Set(key, value string) error {
 		}
 	}
 
-	// 3. 没找到则追加
+	// 4. 没找到则追加
 	if !found {
 		lines = append(lines, key+"="+value)
 	}
 
-	// 4. 写回文件
-	return os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0644)
+	// 5. 写回文件
+	return os.WriteFile(fileName, []byte(strings.Join(lines, "\n")), 0644)
 }
 
 // parseKV 解析一行 KEY=VALUE：容忍等号两侧空格；注释行/空行/无等号行返回 ok=false
